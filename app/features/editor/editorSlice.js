@@ -7,6 +7,8 @@ const initialState = {
   frontCanvasData: null,
   backCanvasData: null,
 
+  textObjects: [], // { id, text, color, fontSize, x, y, side }
+
   tshirt: {
     activeId: "white",
     list: [
@@ -56,6 +58,27 @@ const editorSlice = createSlice({
       );
       if (tshirt) tshirt.color = action.payload;
     },
+    addText: (state, action) => {
+      state.textObjects.push({
+        id: Date.now(),
+        text: "New Text",
+        color: "#000000",
+        fontSize: 0.1,
+        x: 0,
+        y: 0.4,
+        side: state.currentSide,
+      });
+    },
+    updateText: (state, action) => {
+      const { id, data } = action.payload;
+      const index = state.textObjects.findIndex((t) => t.id === id);
+      if (index !== -1) {
+        state.textObjects[index] = { ...state.textObjects[index], ...data };
+      }
+    },
+    removeText: (state, action) => {
+      state.textObjects = state.textObjects.filter((t) => t.id !== action.payload);
+    },
   },
 });
 
@@ -65,6 +88,9 @@ export const {
   updateCanvasData,
   setActiveTshirt,
   setTshirtColor,
+  addText,
+  updateText,
+  removeText,
 } = editorSlice.actions;
 
 export default editorSlice.reducer;

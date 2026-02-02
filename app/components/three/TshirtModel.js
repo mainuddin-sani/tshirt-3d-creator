@@ -1,102 +1,151 @@
 "use client";
 
-import { useGLTF } from "@react-three/drei";
-import { useEffect } from "react";
+import { Decal, Text, useGLTF } from "@react-three/drei";
+import { useFrame } from "@react-three/fiber";
+import { useEffect, useRef, useState } from "react";
 import { useSelector } from "react-redux";
 import * as THREE from "three";
 
 export default function TshirtModel() {
-  const { previewImage, tshirt } = useSelector((s) => s.editor);
+  const { frontImage, backImage, currentSide, tshirt, textObjects } = useSelector((s) => s.editor);
   const activeTshirt = tshirt.list.find((t) => t.id === tshirt.activeId);
-  console.log("Active T-shirt:", activeTshirt);
-  // console.log("Preview Image:", previewImage);
+  const groupRef = useRef();
+  
+  const [frontTexture, setFrontTexture] = useState(null);
+  const [backTexture, setBackTexture] = useState(null);
 
-  // Always call hooks in the same order — compute model path and call useGLTF unconditionally
   const modelPath = activeTshirt?.model || "/models/shirt.glb";
-  const { scene, materials } = useGLTF(modelPath);
+  const { nodes, materials, scene } = useGLTF(modelPath);
 
-  // Debug: log scene & materials to help identify why the model may be invisible
-  console.log("GLTF loaded:", {
-    modelPath,
-    sceneChildren: scene?.children?.length,
-    materials: Object.keys(materials || {}),
-  });
-
-  // If no scene is loaded yet, don't render anything (suspense will handle loading)
-  if (!scene) return null;
-
-  // Fit the loaded model to view and normalize materials so it is visible
   useEffect(() => {
-    if (!scene) return;
+    if (nodes) {
+      console.log("Model Nodes:", Object.keys(nodes));
+      console.log("Model Materials:", Object.keys(materials));
+    }
+  }, [nodes, materials]);
 
-    // compute bounding box & center
-    const bbox = new THREE.Box3().setFromObject(scene);
-    const size = bbox.getSize(new THREE.Vector3());
-    const center = bbox.getCenter(new THREE.Vector3());
-
-    console.log("GLTF bbox:", { size, center });
-
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const scale = maxDim > 0 ? 1.5 / maxDim : 1;
-
-    scene.scale.setScalar(scale);
-    scene.position.x = -center.x * scale;
-    // lower the model slightly so it sits in view
-    scene.position.y = -center.y * scale - 0.05;
-    scene.position.z = -center.z * scale;
-
-    // Ensure meshes render correctly (double sided + shadows) and are updated
-    scene.traverse((child) => {
-      if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-        if (child.material) {
-          child.material.side = THREE.DoubleSide;
-          // add a small emissive to make white shirts visible on white backgrounds during debugging
-          if (child.material.emissive) child.material.emissive.setHex(0x111111);
-          child.material.needsUpdate = true;
-        }
-      }
-    });
+  // Fit and normalize
+  const modelRef = useRef();
+  useEffect(() => {
+    if (scene && modelRef.current) {
+      const box = new THREE.Box3().setFromObject(scene);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const scale = 1.5 / maxDim;
+      
+      modelRef.current.scale.setScalar(scale);
+      modelRef.current.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+    }
   }, [scene]);
 
   useEffect(() => {
-    if (!materials || !activeTshirt?.color) return;
+    if (materials) {
+      Object.values(materials).forEach((mat) => {
+        mat.side = THREE.DoubleSide;
+        if (activeTshirt?.color) {
+          mat.color = new THREE.Color(activeTshirt.color);
+        }
+        mat.map = null;
+        mat.needsUpdate = true;
+      });
+    }
+  }, [materials, activeTshirt?.color]);
 
-    Object.values(materials).forEach((mat) => {
-      if (mat.color) mat.color = new THREE.Color(activeTshirt.color);
-      mat.needsUpdate = true;
-    });
-  }, [activeTshirt?.color, materials]);
-
+  // Load textures for Image Decals (Logos)
   useEffect(() => {
-    if (!previewImage || !materials) return;
+    const loader = new THREE.TextureLoader();
+    if (frontImage) {
+      loader.load(frontImage, (tex) => {
+        tex.anisotropy = 16;
+        setFrontTexture(tex);
+      });
+    }
+    if (backImage) {
+      loader.load(backImage, (tex) => {
+        tex.anisotropy = 16;
+        setBackTexture(tex);
+      });
+    }
+  }, [frontImage, backImage]);
 
-    const texture = new THREE.TextureLoader().load(previewImage);
-    texture.flipY = false;
-
-    Object.values(materials).forEach((mat) => {
-      mat.map = texture;
-      mat.needsUpdate = true;
-    });
-  }, [previewImage, materials]);
-
-  // If the loaded scene has no visible children, render a small debug mesh + axes so we can see the canvas
-  const hasChildren = scene?.children?.length > 0;
+  // Auto-rotate model based on side
+  useFrame(() => {
+    if (!groupRef.current) return;
+    const targetRotation = currentSide === "front" ? 0 : Math.PI;
+    groupRef.current.rotation.y = THREE.MathUtils.lerp(
+      groupRef.current.rotation.y,
+      targetRotation,
+      0.1
+    );
+  });
 
   return (
-    <group>
-      {hasChildren ? (
-        <primitive object={scene} />
-      ) : (
-        <>
-          <axesHelper args={[1]} />
-          <mesh position={[0, 0, 0]}>
-            <boxGeometry args={[0.6, 0.6, 0.6]} />
-            <meshStandardMaterial color={activeTshirt.color || "hotpink"} />
-          </mesh>
-        </>
-      )}
+    <group ref={groupRef}>
+      <group ref={modelRef}>
+        {Object.keys(nodes).map((key) => {
+          const node = nodes[key];
+          if (node.isMesh) {
+            return (
+              <mesh
+                key={key}
+                geometry={node.geometry}
+                material={materials[node.material.name]}
+                castShadow
+                receiveShadow
+              >
+                {/* 3D Image Logos */}
+                {frontTexture && (
+                  <Decal
+                    position={[0, 0.04, 0.15]}
+                    rotation={[0, 0, 0]}
+                    scale={[0.15, 0.25, 1]}
+                    map={frontTexture}
+                  />
+                )}
+                {backTexture && (
+                  <Decal
+                    position={[0, 0.04, -0.15]} 
+                    rotation={[0, Math.PI, 0]}
+                    scale={[0.15, 0.25, 1]}
+                    map={backTexture}
+                  />
+                )}
+
+                {/* 3D Text Objects */}
+                {textObjects.map((txt) => {
+                  const isFront = txt.side === "front";
+                  return (
+                    <Decal
+                      key={txt.id}
+                      position={[txt.x, txt.y, isFront ? 0.15 : -0.15]}
+                      rotation={[0, isFront ? 0 : Math.PI, 0]}
+                      scale={[0.5, 0.5, 1]}
+                    >
+                      <meshBasicMaterial transparent opacity={0} />
+                      <Text
+                        color={txt.color}
+                        fontSize={txt.fontSize}
+                        maxWidth={0.4}
+                        lineHeight={1}
+                        textAlign="center"
+                        anchorX="center"
+                        anchorY="middle"
+                      >
+                        {txt.text}
+                      </Text>
+                    </Decal>
+                  );
+                })}
+              </mesh>
+            );
+          }
+          return null;
+        })}
+      </group>
     </group>
   );
 }
+
+useGLTF.preload("/models/shirt.glb");
